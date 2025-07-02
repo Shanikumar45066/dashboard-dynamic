@@ -26,15 +26,25 @@ df_current = read_file(uploaded_file_3) if uploaded_file_3 else None
 if df_base is not None and df_current is not None:
     st.subheader("🔍 Merging & Comparing Data")
 
-    key = 'client_id'
     df_base.rename(columns=lambda x: x.strip(), inplace=True)
     df_current.rename(columns=lambda x: x.strip(), inplace=True)
+
+    # Dynamically find common key column
+    possible_keys = ['client_id', 'Id', 'client_code', 'Merchant ID']
+    key = next((col for col in possible_keys if col in df_base.columns and col in df_current.columns), None)
+
+    if not key:
+        st.error("❌ No common key column found for merging (e.g., 'client_id', 'Id', 'client_code'). Please ensure both base and current files have a matching column.")
+        st.stop()
 
     df_compare = pd.merge(df_base, df_current, on=key, suffixes=('_base', '_current'))
 
     if df_match is not None:
         df_match.rename(columns=lambda x: x.strip(), inplace=True)
-        df_compare = pd.merge(df_compare, df_match, on=key, how='left')
+        if key in df_match.columns:
+            df_compare = pd.merge(df_compare, df_match[[key] + [col for col in df_match.columns if col != key]], on=key, how='left')
+        else:
+            st.warning("⚠️ Matching file does not contain the key column. Skipping its merge.")
 
     # Define fields to compare
     fields_to_compare = ['success_txn', 'failed_txn', 'abort_init_txn', 'refunded_txn',
@@ -50,8 +60,11 @@ if df_base is not None and df_current is not None:
                                               np.nan)
 
     # Categorization based on paidamount
-    df_compare['Performance Tag'] = np.where(df_compare['paidamount Change %'] > 20, 'High Performing',
-                                    np.where(df_compare['paidamount Change %'] < -20, 'At Risk', 'Stable'))
+    if 'paidamount Change %' in df_compare.columns:
+        df_compare['Performance Tag'] = np.where(df_compare['paidamount Change %'] > 20, 'High Performing',
+                                        np.where(df_compare['paidamount Change %'] < -20, 'At Risk', 'Stable'))
+    else:
+        df_compare['Performance Tag'] = 'Unknown'
 
     # Filters
     st.sidebar.subheader("📌 Filters")
@@ -68,9 +81,11 @@ if df_base is not None and df_current is not None:
     col3.metric("⚠️ At Risk", (df_compare['Performance Tag'] == 'At Risk').sum())
 
     # Charts
-    fig1 = px.bar(df_compare, x='client_name', y='paidamount Change %', color='Performance Tag',
-                  title='GMV (Paid Amount) Change % by Merchant')
-    st.plotly_chart(fig1, use_container_width=True)
+    label_col = 'client_name' if 'client_name' in df_compare.columns else key
+    if 'paidamount Change %' in df_compare.columns:
+        fig1 = px.bar(df_compare, x=label_col, y='paidamount Change %', color='Performance Tag',
+                      title='GMV (Paid Amount) Change % by Merchant')
+        st.plotly_chart(fig1, use_container_width=True)
 
     fig2 = px.pie(df_compare, names='Performance Tag', title='Merchant Categorization')
     st.plotly_chart(fig2, use_container_width=True)
