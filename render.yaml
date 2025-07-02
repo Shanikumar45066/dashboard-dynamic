@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: merchant-dashboard-app
+    env: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "streamlit run merchant_dashboard.py --server.port $PORT"
+    autoDeploy: true
