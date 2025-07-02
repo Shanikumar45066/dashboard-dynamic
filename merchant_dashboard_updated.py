@@ -1,10 +1,10 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
 
 st.set_page_config(page_title="Merchant Performance Dashboard", layout="wide")
-
 st.title("📊 Dynamic Merchant Performance Dashboard")
 
 # Upload files
@@ -17,6 +17,13 @@ def read_file(file):
         return pd.read_csv(file)
     else:
         return pd.read_excel(file)
+
+def map_column(columns, aliases):
+    for alias in aliases:
+        for col in columns:
+            if alias in col:
+                return col
+    return None
 
 # Load available files
 df_match = read_file(uploaded_file_1) if uploaded_file_1 else None
@@ -34,8 +41,6 @@ if df_base is not None and df_current is not None:
 
     # Define possible key names
     possible_keys = ['merchant id', 'client code', 'client_id', 'client code', 'clientid', 'mid']
-
-    # Find common keys
     common_keys = [col for col in df_base.columns if col in df_current.columns and col in possible_keys]
     if not common_keys:
         st.error("❌ No common key (e.g. 'client code', 'merchant id') found in both Base and Current Data.")
@@ -47,20 +52,30 @@ if df_base is not None and df_current is not None:
     # Merge base and current data
     df_compare = pd.merge(df_base, df_current, on=key, suffixes=('_base', '_current'))
 
-    # Merge match file if available
     if df_match is not None and key in df_match.columns:
         df_compare = pd.merge(df_compare, df_match[[key] + [col for col in df_match.columns if col != key]], on=key, how='left')
 
-    # Calculate % Change
-    try:
-        df_compare['txn growth %'] = ((df_compare['transaction count_current'] - df_compare['transaction count_base']) / df_compare['transaction count_base']) * 100
-        df_compare['gmv growth %'] = ((df_compare['gmv_current'] - df_compare['gmv_base']) / df_compare['gmv_base']) * 100
-        df_compare['tsr_current'] = df_compare['successful transactions_current'] / df_compare['transaction count_current']
-    except KeyError:
-        st.error("❌ Ensure columns like 'transaction count', 'gmv', and 'successful transactions' are present in both files.")
+    # Alias mappings
+    txn_aliases = ['transaction count', 'txn_count', 'total transactions', 'success_txn']
+    gmv_aliases = ['gmv', 'paidamount', 'total amount', 'amount']
+    success_aliases = ['successful transactions', 'success_txn', 'txn success', 'successful']
+
+    txn_base_col = map_column(df_compare.columns, [alias + '_base' for alias in txn_aliases])
+    txn_current_col = map_column(df_compare.columns, [alias + '_current' for alias in txn_aliases])
+    gmv_base_col = map_column(df_compare.columns, [alias + '_base' for alias in gmv_aliases])
+    gmv_current_col = map_column(df_compare.columns, [alias + '_current' for alias in gmv_aliases])
+    success_col = map_column(df_compare.columns, [alias + '_current' for alias in success_aliases])
+
+    if not all([txn_base_col, txn_current_col, gmv_base_col, gmv_current_col, success_col]):
+        st.error("❌ Ensure 'Transaction Count', 'GMV', and 'Successful Transactions' columns are present (even under alternative names).")
         st.stop()
 
-    # Merchant Stage Classification
+    # Add calculated columns
+    df_compare['txn growth %'] = ((df_compare[txn_current_col] - df_compare[txn_base_col]) / df_compare[txn_base_col]) * 100
+    df_compare['gmv growth %'] = ((df_compare[gmv_current_col] - df_compare[gmv_base_col]) / df_compare[gmv_base_col]) * 100
+    df_compare['tsr_current'] = df_compare[success_col] / df_compare[txn_current_col]
+
+    # Performance classification
     def classify_stage(growth):
         if growth > 100:
             return 'High Performing'
@@ -84,10 +99,10 @@ if df_base is not None and df_current is not None:
     # Summary Metrics
     st.subheader("📈 Summary Metrics")
     total_merchants = df_compare.shape[0]
-    total_success_txns = df_compare['successful transactions_current'].sum()
-    total_txns = df_compare['transaction count_current'].sum()
+    total_success_txns = df_compare[success_col].sum()
+    total_txns = df_compare[txn_current_col].sum()
     tsr = (total_success_txns / total_txns) * 100 if total_txns > 0 else 0
-    total_gmv = df_compare['gmv_current'].sum()
+    total_gmv = df_compare[gmv_current_col].sum()
     on_track = (df_compare['performance stage'] == 'On Track').sum()
     high_perf = (df_compare['performance stage'] == 'High Performing').sum()
     low_perf = (df_compare['performance stage'] == 'Low Performing').sum()
@@ -104,16 +119,15 @@ if df_base is not None and df_current is not None:
 
     st.metric("🔻 Low Performing", low_perf)
 
-    # Pie chart of performance stages
+    # Charts
     st.subheader("📊 Merchant Performance Categorization")
     fig_stage = px.pie(df_compare, names='performance stage', title='Merchant Categorization by GMV Growth Stage')
     st.plotly_chart(fig_stage, use_container_width=True)
 
-    # Display data
+    # Table & Export
     st.subheader("📋 Merchant Details Table")
     st.dataframe(df_compare)
 
-    # Export CSV
     csv_export = df_compare.to_csv(index=False)
     st.download_button("⬇️ Download Full Report", csv_export, "merchant_performance_report.csv", "text/csv")
 
