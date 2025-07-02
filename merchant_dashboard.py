@@ -26,69 +26,88 @@ df_current = read_file(uploaded_file_3) if uploaded_file_3 else None
 if df_base is not None and df_current is not None:
     st.subheader("🔍 Merging & Comparing Data")
 
-    df_base.rename(columns=lambda x: x.strip(), inplace=True)
-    df_current.rename(columns=lambda x: x.strip(), inplace=True)
+    # Clean column names
+    df_base.columns = df_base.columns.str.strip().str.lower()
+    df_current.columns = df_current.columns.str.strip().str.lower()
+    if df_match is not None:
+        df_match.columns = df_match.columns.str.strip().str.lower()
 
-    # Dynamically find common key column
-    possible_keys = ['client_id', 'Id', 'client_code', 'Merchant ID']
-    key = next((col for col in possible_keys if col in df_base.columns and col in df_current.columns), None)
+    # Define possible key names
+    possible_keys = ['merchant id', 'client code', 'client_id', 'client code', 'clientid', 'mid']
 
-    if not key:
-        st.error("❌ No common key column found for merging (e.g., 'client_id', 'Id', 'client_code'). Please ensure both base and current files have a matching column.")
+    # Find common keys
+    common_keys = [col for col in df_base.columns if col in df_current.columns and col in possible_keys]
+    if not common_keys:
+        st.error("❌ No common key (e.g. 'client code', 'merchant id') found in both Base and Current Data.")
         st.stop()
 
+    key = common_keys[0]
+    st.info(f"✅ Using '{key}' as the key column for merging data.")
+
+    # Merge base and current data
     df_compare = pd.merge(df_base, df_current, on=key, suffixes=('_base', '_current'))
 
-    if df_match is not None:
-        df_match.rename(columns=lambda x: x.strip(), inplace=True)
-        if key in df_match.columns:
-            df_compare = pd.merge(df_compare, df_match[[key] + [col for col in df_match.columns if col != key]], on=key, how='left')
+    # Merge match file if available
+    if df_match is not None and key in df_match.columns:
+        df_compare = pd.merge(df_compare, df_match[[key] + [col for col in df_match.columns if col != key]], on=key, how='left')
+
+    # Calculate % Change
+    try:
+        df_compare['txn growth %'] = ((df_compare['transaction count_current'] - df_compare['transaction count_base']) / df_compare['transaction count_base']) * 100
+        df_compare['gmv growth %'] = ((df_compare['gmv_current'] - df_compare['gmv_base']) / df_compare['gmv_base']) * 100
+        df_compare['tsr_current'] = df_compare['successful transactions_current'] / df_compare['transaction count_current']
+    except KeyError:
+        st.error("❌ Ensure columns like 'transaction count', 'gmv', and 'successful transactions' are present in both files.")
+        st.stop()
+
+    # Merchant Stage Classification
+    def classify_stage(growth):
+        if growth > 100:
+            return 'High Performing'
+        elif growth < 80:
+            return 'Low Performing'
+        elif 90 <= growth <= 99:
+            return 'On Track'
         else:
-            st.warning("⚠️ Matching file does not contain the key column. Skipping its merge.")
+            return 'Stable'
 
-    # Define fields to compare
-    fields_to_compare = ['success_txn', 'failed_txn', 'abort_init_txn', 'refunded_txn',
-                         'refund_init_txn', 'total_txn', 'TSR', 'paidamount', 'payeeamount']
-
-    for field in fields_to_compare:
-        base_col = f"{field}_base"
-        current_col = f"{field}_current"
-        change_col = f"{field} Change %"
-        if base_col in df_compare.columns and current_col in df_compare.columns:
-            df_compare[change_col] = np.where(df_compare[base_col] != 0,
-                                              ((df_compare[current_col] - df_compare[base_col]) / df_compare[base_col]) * 100,
-                                              np.nan)
-
-    # Categorization based on paidamount
-    if 'paidamount Change %' in df_compare.columns:
-        df_compare['Performance Tag'] = np.where(df_compare['paidamount Change %'] > 20, 'High Performing',
-                                        np.where(df_compare['paidamount Change %'] < -20, 'At Risk', 'Stable'))
-    else:
-        df_compare['Performance Tag'] = 'Unknown'
+    df_compare['performance stage'] = df_compare['gmv growth %'].apply(classify_stage)
 
     # Filters
     st.sidebar.subheader("📌 Filters")
-    am_list = df_compare['Account Manager'].dropna().unique() if 'Account Manager' in df_compare.columns else []
+    am_list = df_compare['account manager'].dropna().unique() if 'account manager' in df_compare.columns else []
     selected_am = st.sidebar.selectbox("Select Account Manager", ['All'] + list(am_list))
 
     if selected_am != 'All':
-        df_compare = df_compare[df_compare['Account Manager'] == selected_am]
+        df_compare = df_compare[df_compare['account manager'] == selected_am]
 
+    # Summary Metrics
     st.subheader("📈 Summary Metrics")
+    total_merchants = df_compare.shape[0]
+    total_success_txns = df_compare['successful transactions_current'].sum()
+    total_txns = df_compare['transaction count_current'].sum()
+    tsr = (total_success_txns / total_txns) * 100 if total_txns > 0 else 0
+    total_gmv = df_compare['gmv_current'].sum()
+    on_track = (df_compare['performance stage'] == 'On Track').sum()
+    high_perf = (df_compare['performance stage'] == 'High Performing').sum()
+    low_perf = (df_compare['performance stage'] == 'Low Performing').sum()
+
     col1, col2, col3 = st.columns(3)
-    col1.metric("📦 Total Merchants", df_compare.shape[0])
-    col2.metric("📈 High Performing", (df_compare['Performance Tag'] == 'High Performing').sum())
-    col3.metric("⚠️ At Risk", (df_compare['Performance Tag'] == 'At Risk').sum())
+    col1.metric("📦 Total Merchants", total_merchants)
+    col2.metric("✅ Total Successful Txns", int(total_success_txns))
+    col3.metric("📊 TSR (%)", round(tsr, 2))
 
-    # Charts
-    label_col = 'client_name' if 'client_name' in df_compare.columns else key
-    if 'paidamount Change %' in df_compare.columns:
-        fig1 = px.bar(df_compare, x=label_col, y='paidamount Change %', color='Performance Tag',
-                      title='GMV (Paid Amount) Change % by Merchant')
-        st.plotly_chart(fig1, use_container_width=True)
+    col4, col5, col6 = st.columns(3)
+    col4.metric("💰 Total GMV", f"{total_gmv:,.2f}")
+    col5.metric("📈 High Performing", high_perf)
+    col6.metric("🟡 On Track", on_track)
 
-    fig2 = px.pie(df_compare, names='Performance Tag', title='Merchant Categorization')
-    st.plotly_chart(fig2, use_container_width=True)
+    st.metric("🔻 Low Performing", low_perf)
+
+    # Pie chart of performance stages
+    st.subheader("📊 Merchant Performance Categorization")
+    fig_stage = px.pie(df_compare, names='performance stage', title='Merchant Categorization by GMV Growth Stage')
+    st.plotly_chart(fig_stage, use_container_width=True)
 
     # Display data
     st.subheader("📋 Merchant Details Table")
