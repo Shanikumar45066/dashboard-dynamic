@@ -8,7 +8,7 @@ st.set_page_config(page_title="Merchant Performance Dashboard", layout="wide")
 st.title("📊 Dynamic Merchant Performance Dashboard")
 
 # Upload files
-uploaded_file_1 = st.file_uploader("Upload Matching File (AM & Merchant ID)", type=["csv", "xlsx"])
+uploaded_file_1 = st.file_uploader("Upload Matching File (AM & Client code)", type=["csv", "xlsx"])
 uploaded_file_2 = st.file_uploader("Upload Base Data (Previous Month)", type=["csv", "xlsx"])
 uploaded_file_3 = st.file_uploader("Upload Current Data (This Month)", type=["csv", "xlsx"])
 
@@ -27,7 +27,7 @@ if df_base is not None and df_current is not None:
     st.subheader("🔍 Merging & Comparing Data")
 
     # Merge all dataframes
-    key = 'Merchant ID'
+    key = 'Client Code'
     df_base.rename(columns=lambda x: x.strip(), inplace=True)
     df_current.rename(columns=lambda x: x.strip(), inplace=True)
 
@@ -60,7 +60,7 @@ if df_base is not None and df_current is not None:
     col3.metric("⚠️ At Risk", (df_compare['Performance Tag'] == 'At Risk').sum())
 
     # Charts
-    fig1 = px.bar(df_compare, x='Merchant ID', y='GMV Growth %', color='Performance Tag', title='GMV Growth % by Merchant')
+    fig1 = px.bar(df_compare, x='Client Code', y='GMV Growth %', color='Performance Tag', title='GMV Growth % by Merchant')
     st.plotly_chart(fig1, use_container_width=True)
 
     fig2 = px.pie(df_compare, names='Performance Tag', title='Merchant Categorization')
