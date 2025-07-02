@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: merchant-dashboard
+    env: python
+    plan: free
+    buildCommand: ""
+    startCommand: streamlit run merchant_dashboard.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10
